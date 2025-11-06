@@ -15,57 +15,80 @@ class InvestmentDatabase:
         self.investments = []
         self.user_profiles = {}
         
-    def add_user(self, user_id, name, initial_balance=10000):
-        """Add a new user to the system"""
+    # Replace the existing add_user and add_transaction methods in InvestmentDatabase
+
+    def add_user(self, user_id, name, initial_balance=0.0):
+        """Add a new user to the system (idempotent). Returns user dict."""
+        user_id = str(user_id)
         if user_id not in self.users:
             self.users[user_id] = {
                 'user_id': user_id,
                 'name': name,
                 'created_at': datetime.now(),
                 'round_up_rule': 50,  # Round to nearest 50
-                'threshold': 100,  # Minimum wallet balance to invest
+                'threshold': 100.0,   # Minimum wallet balance to invest
                 'profile': 'Moderate'
             }
             self.wallets[user_id] = {
-                'balance': 0.0,
+                'balance': float(initial_balance),
                 'total_rounded_up': 0.0,
                 'total_invested': 0.0
             }
             self.portfolios[user_id] = {
-                'equity': {'units': 0, 'invested': 0},
-                'gold': {'units': 0, 'invested': 0},
-                'fd': {'units': 0, 'invested': 0},
-                'liquid': {'units': 0, 'invested': 0}
+                'equity': {'units': 0.0, 'invested': 0.0},
+                'gold': {'units': 0.0, 'invested': 0.0},
+                'fd': {'units': 0.0, 'invested': 0.0},
+                'liquid': {'units': 0.0, 'invested': 0.0}
             }
         return self.users[user_id]
-    
+
     def add_transaction(self, user_id, amount, merchant, category, timestamp=None):
-        """Add a transaction and calculate round-up"""
+        """Add a transaction and calculate round-up. Returns transaction dict.
+
+        If user doesn't exist, raises KeyError.
+        """
+        user_id = str(user_id)
+        if user_id not in self.users:
+            raise KeyError(f"User {user_id} not found. Call add_user() first.")
+
         if timestamp is None:
             timestamp = datetime.now()
-        
-        round_up_rule = self.users[user_id]['round_up_rule']
-        rounded_amount = np.ceil(amount / round_up_rule) * round_up_rule
-        spare_change = rounded_amount - amount
-        
+
+        # ensure numeric amount
+        try:
+            amount_val = float(amount)
+        except Exception:
+            raise ValueError("Invalid transaction amount")
+
+        round_up_rule = self.users[user_id].get('round_up_rule', 50)
+        if round_up_rule <= 0:
+            round_up_rule = 50
+
+        # calculate spare change using exact math
+        rounded_amount = float(np.ceil(amount_val / round_up_rule) * round_up_rule)
+        spare_change = rounded_amount - amount_val
+        spare_change = round(float(spare_change), 2)
+
+        trans_id = len(self.transactions)
         transaction = {
-            'trans_id': len(self.transactions),
+            'trans_id': trans_id,
             'user_id': user_id,
-            'amount': amount,
+            'amount': amount_val,
             'merchant': merchant,
             'category': category,
             'timestamp': timestamp,
             'spare_change': spare_change,
             'rounded_amount': rounded_amount
         }
-        
+
         self.transactions.append(transaction)
-        
+
         # Update wallet
-        self.wallets[user_id]['balance'] += spare_change
-        self.wallets[user_id]['total_rounded_up'] += spare_change
-        
+        self.wallets[user_id]['balance'] = round(self.wallets[user_id]['balance'] + spare_change, 2)
+        self.wallets[user_id]['total_rounded_up'] = round(self.wallets[user_id]['total_rounded_up'] + spare_change, 2)
+
         return transaction
+
     
     def get_user_transactions(self, user_id, days=30):
         """Get recent transactions for a user"""

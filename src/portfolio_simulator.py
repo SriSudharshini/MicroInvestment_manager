@@ -5,27 +5,39 @@ import yfinance as yf
 
 class MarketDataSimulator:
     """
-    Simulates market data using historical prices or synthetic data
+    Market data with REAL-TIME prices from Yahoo Finance
     """
     
-    def __init__(self):
-        self.historical_data = {}
-        self.current_prices = {
-            'equity': 100.0,  # Base price
-            'gold': 50000.0,  # Per 10g
-            'fd': 100.0,      # Base (grows by interest rate)
-            'liquid': 100.0   # Stable
+    def __init__(self, use_real_data=True):
+        self.use_real_data = use_real_data
+        
+        # Asset ticker mapping to Yahoo Finance symbols
+        self.tickers = {
+            'equity': '^NSEI',      # NIFTY 50 Index
+            'gold': 'GC=F',         # Gold Futures
+            'fd': None,             # Fixed Deposit (simulated)
+            'liquid': None          # Liquid funds (simulated)
         }
         
-        # Annual returns (approximate)
+        # Base prices (fallback if API fails)
+        self.base_prices = {
+            'equity': 19500.0,   # NIFTY 50 approximate
+            'gold': 62000.0,     # Gold per 10g (INR)
+            'fd': 100.0,         # Fixed Deposit unit
+            'liquid': 100.0      # Liquid fund NAV
+        }
+        
+        self.current_prices = self.base_prices.copy()
+        
+        # Annual returns (for simulation)
         self.expected_returns = {
-            'equity': 0.12,    # 12% annual
-            'gold': 0.08,      # 8% annual
-            'fd': 0.065,       # 6.5% annual
-            'liquid': 0.04     # 4% annual
+            'equity': 0.12,
+            'gold': 0.08,
+            'fd': 0.065,
+            'liquid': 0.04
         }
         
-        # Volatility (standard deviation)
+        # Volatility
         self.volatility = {
             'equity': 0.18,
             'gold': 0.12,
@@ -34,7 +46,53 @@ class MarketDataSimulator:
         }
         
         self.start_date = datetime(2023, 1, 1)
+        self.historical_data = {}
+        
+        # Initialize with real data if available
+        if self.use_real_data:
+            self._fetch_real_prices()
+        
+        # Generate synthetic history for backtesting
         self._generate_synthetic_history()
+    
+    def _fetch_real_prices(self):
+        """Fetch current prices from Yahoo Finance"""
+        try:
+            import yfinance as yf
+            
+            # Fetch NIFTY 50
+            try:
+                nifty = yf.Ticker('^NSEI')
+                nifty_data = nifty.history(period='1d')
+                if not nifty_data.empty:
+                    self.current_prices['equity'] = float(nifty_data['Close'].iloc[-1])
+            except:
+                pass
+            
+            # Fetch Gold
+            try:
+                gold = yf.Ticker('GC=F')
+                gold_data = gold.history(period='1d')
+                if not gold_data.empty:
+                    # Convert USD per troy ounce to INR per 10g
+                    gold_usd = float(gold_data['Close'].iloc[-1])
+                    usd_to_inr = 83.0  # Approximate exchange rate
+                    troy_ounce_to_10g = 0.3215  # 1 troy ounce = 31.1g
+                    self.current_prices['gold'] = gold_usd * usd_to_inr * troy_ounce_to_10g
+            except:
+                pass
+            
+            # FD and Liquid grow steadily (simulated)
+            days_since_start = (datetime.now() - self.start_date).days
+            daily_fd_return = self.expected_returns['fd'] / 365
+            daily_liquid_return = self.expected_returns['liquid'] / 365
+            
+            self.current_prices['fd'] = self.base_prices['fd'] * (1 + daily_fd_return) ** days_since_start
+            self.current_prices['liquid'] = self.base_prices['liquid'] * (1 + daily_liquid_return) ** days_since_start
+            
+        except Exception as e:
+            print(f"Error fetching real prices: {e}")
+            # Keep base prices as fallback
     
     def _generate_synthetic_history(self, days=730):
         """Generate synthetic price history using geometric Brownian motion"""
@@ -63,17 +121,26 @@ class MarketDataSimulator:
     def get_price(self, asset, date=None):
         """Get price for an asset on a specific date"""
         if date is None:
+            # Return current live price
+            if self.use_real_data:
+                self._fetch_real_prices()  # Refresh prices
             return self.current_prices[asset]
         
+        # Historical price lookup
         if asset not in self.historical_data:
             return self.current_prices[asset]
         
         df = self.historical_data[asset]
-        closest_date = df.iloc[(df['date'] - date).abs().argsort()[:1]]
-        return closest_date['price'].values[0]
+        
+        # Find closest date
+        closest_idx = (df['date'] - date).abs().argsort()[0]
+        return df.iloc[closest_idx]['price']
     
     def get_all_prices(self, date=None):
         """Get prices for all assets"""
+        if date is None and self.use_real_data:
+            self._fetch_real_prices()  # Refresh for current prices
+        
         return {asset: self.get_price(asset, date) for asset in self.current_prices.keys()}
     
     def calculate_returns(self, asset, start_date, end_date):
@@ -212,8 +279,17 @@ class PortfolioSimulator:
         Returns:
             DataFrame with date and portfolio value
         """
+        # Get user's first investment date
+        user_investments = [inv for inv in db.investments if inv['user_id'] == user_id]
+        
+        if not user_investments:
+            # No investments yet, return empty dataframe
+            return pd.DataFrame({'date': [], 'value': []})
+        
+        # Start from first investment date
+        first_investment_date = min(inv['timestamp'] for inv in user_investments)
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        start_date = max(first_investment_date, end_date - timedelta(days=days))
         
         dates = []
         values = []
@@ -235,6 +311,12 @@ class PortfolioSimulator:
         """Get performance of each asset in portfolio"""
         portfolio = db.get_portfolio(user_id)
         performance = {}
+        
+        # Get user's investments
+        user_investments = [inv for inv in db.investments if inv['user_id'] == user_id]
+        
+        if not user_investments:
+            return performance
         
         for asset, holding in portfolio.items():
             if holding['units'] > 0:

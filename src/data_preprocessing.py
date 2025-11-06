@@ -15,7 +15,7 @@ def load_and_preprocess_data(filepath, num_users=10):
     """
     # Load data
     print(f"Loading data from {filepath}...")
-    df = pd.read_csv(filepath, low_memory=False)
+    df = pd.read_csv(filepath, low_memory=False,nrows=50)
     
     # Select necessary columns
     columns_needed = [
