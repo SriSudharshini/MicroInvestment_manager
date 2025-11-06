@@ -41,18 +41,12 @@ def load_data():
     if running_in_cloud:
         # Load from Google Drive link
         url = "https://drive.google.com/uc?id=1WFVwcUXcvWc3BFBkBI1ZYSxk1iAZudUL"
-        st.info("Loading data from Google Drive...")
         df = pd.read_csv(url)
     else:
-        # Load from local file
-        st.info("Loading data from local disk...")
         df = pd.read_csv("data/raw/transactions.csv")
     return df
 
 df = load_data()
-
-st.success(f"Loaded {len(df):,} records successfully!")
-st.dataframe(df.head())
 
 def initialize_system():
     """Initialize the system with sample data"""
