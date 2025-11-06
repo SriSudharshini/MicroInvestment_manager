@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from database import InvestmentDatabase
 from data_preprocessing import (load_and_preprocess_data, compute_spending_features,prepare_ml_features,create_sample_users_dataset)
 from user_profiling import UserProfiler, build_user_profiles
