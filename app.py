@@ -6,17 +6,22 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-from database import InvestmentDatabase
-from data_preprocessing import (load_and_preprocess_data, compute_spending_features,prepare_ml_features,create_sample_users_dataset)
-from user_profiling import UserProfiler, build_user_profiles
-from allocation_engine import AllocationEngine, check_batch_trigger
-from portfolio_simulator import MarketDataSimulator, PortfolioSimulator
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-running_in_cloud = os.environ.get("STREAMLIT_RUNTIME") is not None
+from database import InvestmentDatabase
+from data_preprocessing import (
+    load_and_preprocess_data, 
+    compute_spending_features,
+    prepare_ml_features,
+    create_sample_users_dataset
+)
+from user_profiling import UserProfiler, build_user_profiles
+from allocation_engine import AllocationEngine, check_batch_trigger
+from portfolio_simulator import MarketDataSimulator, PortfolioSimulator
+
+# Page config
 st.set_page_config(
     page_title="Smart Investment Round-Up",
     page_icon="💰",
@@ -37,23 +42,12 @@ if 'initialized' not in st.session_state:
     st.session_state.active_model = 'kmeans'
     st.session_state.last_price_update = datetime.now()
 
-def load_data():
-    if running_in_cloud:
-        # Load from Google Drive link
-        url = "https://drive.google.com/uc?id=1WFVwcUXcvWc3BFBkBI1ZYSxk1iAZudUL"
-        df = pd.read_csv(url)
-    else:
-        df = pd.read_csv("data/raw/transactions.csv")
-    return df
-
-df = load_data()
-
 def initialize_system():
     """Initialize the system with sample data"""
     with st.spinner("Loading and processing data..."):
         # Load transaction data
         if os.path.exists('data/raw/transactions.csv'):
-            df = load_and_preprocess_data('data/raw/transactions.csv', num_users=6)
+            df = load_and_preprocess_data('data/raw/transactions.csv', num_users=5)
             st.session_state.transactions_df = df
             
             # Create users in database
@@ -133,39 +127,13 @@ def execute_batch_investment(user_id):
         st.error("Investment failed - insufficient wallet balance")
 
 def update_ml_allocations():
-    """Update ML-based allocations for all users"""
+    """Update ML-based allocations and re-profile users"""
     db = st.session_state.db
-    changes_detected = []
+    allocation_changes = []
     
-    with st.spinner("🔄 Updating ML models and checking for changes..."):
-        # Step 1: Update allocations based on performance
-        for user_id in db.users.keys():
-            performance = st.session_state.portfolio_sim.get_asset_performance(
-                db, user_id, days=30
-            )
-            
-            if performance:
-                profile = db.users[user_id]['profile']
-                old_weights = st.session_state.allocator.baseline_allocations[profile].copy()
-                
-                new_weights, adjustments = st.session_state.allocator.update_weights(
-                    user_id, profile, performance
-                )
-                
-                # Check if significant changes occurred
-                for asset, adjustment in adjustments.items():
-                    if abs(adjustment) > 0.01:  # More than 1% change
-                        changes_detected.append({
-                            'user': db.users[user_id]['name'],
-                            'asset': asset,
-                            'old': old_weights.get(asset, 0) * 100,
-                            'new': new_weights.get(asset, 0) * 100,
-                            'change': adjustment * 100
-                        })
-    
-    # Step 2: Re-profile users based on NEW transactions
-    if st.session_state.transactions_df is not None:
-        with st.spinner("📊 Re-analyzing user spending patterns..."):
+    with st.spinner("🔄 Updating ML models and rebalancing portfolios..."):
+        # Step 1: Re-profile users based on updated transaction data
+        if st.session_state.transactions_df is not None:
             df = st.session_state.transactions_df
             
             # Add recent transactions from database
@@ -184,127 +152,110 @@ def update_ml_allocations():
             
             st.session_state.transactions_df = df
             
-            # Rebuild profiles
-            user_ids = list(db.users.keys())
-            
-            # Store old profiles
-            old_profiles = {}
-            for uid in user_ids:
-                old_profiles[uid] = {
-                    'kmeans': st.session_state.profiler_kmeans.kmeans_profiles.get(uid, {}),
-                    'gmm': st.session_state.profiler_gmm.gmm_profiles.get(uid, {})
-                }
-            
             # Retrain both models
+            user_ids = list(db.users.keys())
             from src.user_profiling import build_user_profiles
+            
             st.session_state.profiler_kmeans = build_user_profiles(
                 df, user_ids, db, model_type='kmeans'
             )
             st.session_state.profiler_gmm = build_user_profiles(
                 df, user_ids, db, model_type='gmm'
             )
+        
+        # Step 2: Update allocations based on performance
+        for user_id in db.users.keys():
+            # Get current profile (may have changed after re-profiling)
+            profile = db.users[user_id]['profile']
             
-            # Detect cluster changes
-            cluster_changes = []
-            for uid in user_ids:
-                old_km = old_profiles[uid]['kmeans']
-                new_km = st.session_state.profiler_kmeans.kmeans_profiles.get(uid, {})
+            # Get baseline allocation for this profile
+            baseline_alloc = st.session_state.allocator.baseline_allocations[profile].copy()
+            
+            # Check if user has custom allocation already
+            old_alloc = st.session_state.allocator.custom_allocations.get(
+                user_id, 
+                baseline_alloc
+            )
+            
+            # Get performance data
+            performance = st.session_state.portfolio_sim.get_asset_performance(
+                db, user_id, days=30
+            )
+            
+            if performance:
+                # Update weights based on performance
+                new_alloc, adjustments = st.session_state.allocator.update_weights(
+                    user_id, profile, performance
+                )
                 
-                if old_km and new_km:
-                    if old_km.get('cluster') != new_km.get('cluster'):
-                        cluster_changes.append({
-                            'user': db.users[uid]['name'],
-                            'model': 'K-Means',
-                            'old_cluster': old_km.get('cluster'),
-                            'new_cluster': new_km.get('cluster'),
-                            'old_profile': old_km.get('profile'),
-                            'new_profile': new_km.get('profile'),
-                            'old_risk': old_km.get('risk_score', 0),
-                            'new_risk': new_km.get('risk_score', 0)
-                        })
-                
-                old_gm = old_profiles[uid]['gmm']
-                new_gm = st.session_state.profiler_gmm.gmm_profiles.get(uid, {})
-                
-                if old_gm and new_gm:
-                    if old_gm.get('cluster') != new_gm.get('cluster'):
-                        cluster_changes.append({
-                            'user': db.users[uid]['name'],
-                            'model': 'GMM',
-                            'old_cluster': old_gm.get('cluster'),
-                            'new_cluster': new_gm.get('cluster'),
-                            'old_profile': old_gm.get('profile'),
-                            'new_profile': new_gm.get('profile'),
-                            'old_risk': old_gm.get('risk_score', 0),
-                            'new_risk': new_gm.get('risk_score', 0)
+                # Check for significant changes in allocation ratios
+                for asset in ['equity', 'gold', 'fd', 'liquid']:
+                    old_pct = old_alloc.get(asset, 0) * 100
+                    new_pct = new_alloc.get(asset, 0) * 100
+                    change = new_pct - old_pct
+                    
+                    # Only report changes > 2%
+                    if abs(change) > 2.0:
+                        allocation_changes.append({
+                            'user': db.users[user_id]['name'],
+                            'profile': profile,
+                            'asset': asset.capitalize(),
+                            'old_pct': old_pct,
+                            'new_pct': new_pct,
+                            'change': change,
+                            'reason': 'Performance-based adjustment' if user_id in st.session_state.allocator.custom_allocations else 'Profile updated'
                         })
     
     # Display results
     st.success("✅ ML models updated successfully!")
     
-    if cluster_changes:
-        st.warning(f"🔄 {len(cluster_changes)} cluster change(s) detected!")
+    # Show allocation changes
+    if allocation_changes:
+        st.warning(f"⚖️ {len(allocation_changes)} allocation ratio change(s) detected!")
         
-        for change in cluster_changes:
-            with st.expander(f"🎯 {change['user']} - {change['model']} Profile Changed"):
-                col1, col2, col3 = st.columns(3)
+        # Group by user
+        users_with_changes = {}
+        for change in allocation_changes:
+            user_name = change['user']
+            if user_name not in users_with_changes:
+                users_with_changes[user_name] = {
+                    'profile': change['profile'],
+                    'changes': []
+                }
+            users_with_changes[user_name]['changes'].append(change)
+        
+        # Display each user's changes
+        for user_name, data in users_with_changes.items():
+            with st.expander(f"💼 {user_name} ({data['profile']}) - Allocation Updated"):
+                changes_df = pd.DataFrame([
+                    {
+                        'Asset': c['asset'],
+                        'Old Ratio': f"{c['old_pct']:.1f}%",
+                        'New Ratio': f"{c['new_pct']:.1f}%",
+                        'Change': f"{c['change']:+.1f}%",
+                        'Reason': c['reason']
+                    }
+                    for c in data['changes']
+                ])
                 
+                st.dataframe(changes_df, use_container_width=True, hide_index=True)
+                
+                # Show visual comparison
+                col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown("**Before:**")
-                    st.info(f"Cluster {change['old_cluster']}")
-                    st.info(f"{change['old_profile']}")
-                    st.metric("Risk Score", f"{change['old_risk']:.2f}")
+                    st.markdown("**Old Allocation:**")
+                    for c in data['changes']:
+                        st.caption(f"{c['asset']}: {c['old_pct']:.1f}%")
                 
                 with col2:
-                    st.markdown("**→**")
-                    st.markdown("### ➡️")
+                    st.markdown("**New Allocation:**")
+                    for c in data['changes']:
+                        color = "🟢" if c['change'] > 0 else "🔴"
+                        st.caption(f"{c['asset']}: {c['new_pct']:.1f}% {color}")
                 
-                with col3:
-                    st.markdown("**After:**")
-                    st.success(f"Cluster {change['new_cluster']}")
-                    st.success(f"{change['new_profile']}")
-                    st.metric("Risk Score", f"{change['new_risk']:.2f}",
-                             delta=f"{change['new_risk'] - change['old_risk']:+.2f}")
-                
-                # Show what this means for allocation
-                old_alloc = st.session_state.allocator.baseline_allocations.get(
-                    change['old_profile'], {}
-                )
-                new_alloc = st.session_state.allocator.baseline_allocations.get(
-                    change['new_profile'], {}
-                )
-                
-                st.markdown("**Allocation Impact:**")
-                alloc_comparison = pd.DataFrame({
-                    'Asset': ['Equity', 'Gold', 'FD', 'Liquid'],
-                    'Old %': [
-                        old_alloc.get('equity', 0) * 100,
-                        old_alloc.get('gold', 0) * 100,
-                        old_alloc.get('fd', 0) * 100,
-                        old_alloc.get('liquid', 0) * 100
-                    ],
-                    'New %': [
-                        new_alloc.get('equity', 0) * 100,
-                        new_alloc.get('gold', 0) * 100,
-                        new_alloc.get('fd', 0) * 100,
-                        new_alloc.get('liquid', 0) * 100
-                    ]
-                })
-                alloc_comparison['Change'] = alloc_comparison['New %'] - alloc_comparison['Old %']
-                st.dataframe(alloc_comparison, use_container_width=True)
+                st.info(f"💡 Next investment will use the new allocation ratios")
     else:
-        st.info("ℹ️ No cluster changes detected. Users remain in their current profiles.")
-    
-    if changes_detected:
-        st.info(f"💡 {len(changes_detected)} allocation adjustment(s) made based on performance")
-        
-        changes_df = pd.DataFrame(changes_detected)
-        changes_df['old'] = changes_df['old'].apply(lambda x: f"{x:.1f}%")
-        changes_df['new'] = changes_df['new'].apply(lambda x: f"{x:.1f}%")
-        changes_df['change'] = changes_df['change'].apply(lambda x: f"{x:+.2f}%")
-        changes_df.columns = ['User', 'Asset', 'Old %', 'New %', 'Change']
-        
-        st.dataframe(changes_df, use_container_width=True)
+        st.info("ℹ️ No significant allocation changes (>2%). Ratios remain stable.")
 
 # Main UI
 st.title("💰 Smart Investment Round-Up System")
@@ -330,15 +281,32 @@ with st.sidebar:
             index=0 if st.session_state.active_model == 'kmeans' else 1
         )
         
-        # Update ML button
-        if st.button("🔄 Update ML Models", type="primary"):
+        
+        if st.button("🔄 Update ML Models"):
             update_ml_allocations()
-                
+        
         st.divider()
         
         # User selection
         st.header("👤 Select User")
         user_list = list(st.session_state.db.users.keys())
+        
+        # Show cluster mapping first
+        if st.session_state.active_model == 'kmeans':
+            profiler = st.session_state.profiler_kmeans
+            model_name = 'K-Means'
+        else:
+            profiler = st.session_state.profiler_gmm
+            model_name = 'GMM'
+        
+        if hasattr(profiler, 'cluster_mapping') and st.session_state.active_model in profiler.cluster_mapping:
+            st.caption(f"**{model_name} Cluster Mapping:**")
+            mapping = profiler.cluster_mapping[st.session_state.active_model]
+            for cluster_id in sorted(mapping.keys()):
+                profile = mapping[cluster_id]
+                st.caption(f"C{cluster_id} = {profile}")
+        
+        st.divider()
         
         # Create better display names
         user_display_names = []
@@ -353,7 +321,8 @@ with st.sidebar:
                 cluster_data = st.session_state.profiler_gmm.gmm_profiles.get(uid, {})
             
             cluster = cluster_data.get('cluster', 0)
-            display_name = f"{name} | {profile} | Cluster {cluster}"
+            risk_score = cluster_data.get('risk_score', 0)
+            display_name = f"{name}"
             user_display_names.append(display_name)
         
         selected_idx = st.selectbox(
@@ -858,13 +827,9 @@ else:
         
         # TAB 5: XAI & Model Comparison
         with tab5:
-            st.subheader("🔍 Explainable AI (XAI) - Why This Profile?")
-            
+          
             # Feature importance
             if hasattr(st.session_state.profiler_kmeans, 'feature_importance'):
-                st.markdown("### 📊 Feature Importance")
-                st.markdown("*Which spending patterns matter most for profiling?*")
-                
                 importance_data = st.session_state.profiler_kmeans.get_feature_importance()
                 importance_df = pd.DataFrame([
                     {'Feature': k.replace('_', ' ').title(), 'Importance': v}
@@ -885,7 +850,6 @@ else:
             st.divider()
             
             # User-specific explanation
-            st.markdown("### 🎯 Your Profile Explanation")
             
             if hasattr(db, 'user_feature_matrices') and user_id in db.user_feature_matrices:
                 feature_vector = db.user_feature_matrices[user_id]
@@ -912,29 +876,16 @@ else:
                 # K-Means metrics
                 if hasattr(st.session_state.profiler_kmeans, 'comparison_metrics'):
                     metrics = st.session_state.profiler_kmeans.comparison_metrics.get('kmeans', {})
-                    st.markdown("**Model Metrics:**")
-                    st.markdown(f"- Silhouette Score: {metrics.get('silhouette', 0):.3f}")
-                    st.markdown(f"- Davies-Bouldin Index: {metrics.get('davies_bouldin', 0):.3f}")
             
             with col2:
                 st.markdown("#### Gaussian Mixture Model")
                 st.markdown(f"**Profile:** {gmm_profile.get('profile', 'N/A')}")
                 st.markdown(f"**Cluster:** C{gmm_profile.get('cluster', 0)}")
                 st.markdown(f"**Risk Score:** {gmm_profile.get('risk_score', 0):.3f}")
-                
-                # GMM-specific: probability distribution
-                if 'cluster_probabilities' in gmm_profile:
-                    st.markdown("**Cluster Probabilities:**")
-                    probs = gmm_profile['cluster_probabilities']
-                    for i, p in enumerate(probs):
-                        st.markdown(f"- Cluster {i}: {p:.1%}")
-                
+                              
                 # GMM metrics
                 if hasattr(st.session_state.profiler_gmm, 'comparison_metrics'):
                     metrics = st.session_state.profiler_gmm.comparison_metrics.get('gmm', {})
-                    st.markdown("**Model Metrics:**")
-                    st.markdown(f"- Silhouette Score: {metrics.get('silhouette', 0):.3f}")
-                    st.markdown(f"- BIC: {metrics.get('bic', 0):.1f}")
             
             st.divider()
             
