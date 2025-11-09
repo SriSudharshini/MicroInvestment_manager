@@ -93,16 +93,12 @@ class UserProfiler:
             # GMM profile
             gm_profile = self.cluster_mapping['gmm'][gm_cluster]
             gm_risk_score = self._compute_risk_score(gm_cluster, feature_matrix, gmm_clusters)
-            
-            # GMM also provides probability distribution
-            probs = self.gmm.predict_proba(self.scaler.transform([feature_matrix[list(user_ids).index(user_id)]]))[0]
-            
+                        
             self.gmm_profiles[user_id] = {
                 'profile': gm_profile,
                 'cluster': int(gm_cluster),
                 'risk_score': gm_risk_score,
                 'model': 'Gaussian Mixture',
-                'cluster_probabilities': probs.tolist()
             }
         
         self.is_fitted = True
@@ -270,79 +266,7 @@ class UserProfiler:
             'kmeans': self.kmeans_profiles.get(user_id, {}),
             'gmm': self.gmm_profiles.get(user_id, {})
         }
-    
-    def predict(self, feature_vector):
-        """Predict profile for a new user"""
-        if not self.is_fitted:
-            raise ValueError("Model must be fitted before prediction")
         
-        X_scaled = self.scaler.transform(feature_vector.reshape(1, -1))
-        
-        if self.model_type == 'kmeans':
-            cluster = self.kmeans.predict(X_scaled)[0]
-            profile = self.cluster_mapping['kmeans'][cluster]
-            distances = self.kmeans.transform(X_scaled)[0]
-            risk_score = 1 - (distances[cluster] / distances.sum())
-        else:
-            cluster = self.gmm.predict(X_scaled)[0]
-            profile = self.cluster_mapping['gmm'][cluster]
-            probs = self.gmm.predict_proba(X_scaled)[0]
-            risk_score = probs[cluster]
-        
-        return {
-            'profile': profile,
-            'cluster': int(cluster),
-            'risk_score': risk_score
-        }
-    
-    def get_pca_projection(self, feature_matrix):
-        """Get 2D PCA projection for visualization"""
-        if not self.is_fitted:
-            raise ValueError("Model must be fitted first")
-        
-        X_scaled = self.scaler.transform(feature_matrix)
-        return self.pca.transform(X_scaled)
-    
-    def save_model(self, filepath='models/saved_models/user_profiler.pkl'):
-        """Save the model to disk"""
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        model_data = {
-            'scaler': self.scaler,
-            'kmeans': self.kmeans,
-            'gmm': self.gmm,
-            'pca': self.pca,
-            'cluster_mapping': self.cluster_mapping,
-            'is_fitted': self.is_fitted,
-            'kmeans_profiles': self.kmeans_profiles,
-            'gmm_profiles': self.gmm_profiles,
-            'comparison_metrics': self.comparison_metrics,
-            'feature_importance': self.feature_importance
-        }
-        
-        with open(filepath, 'wb') as f:
-            pickle.dump(model_data, f)
-    
-    def load_model(self, filepath='models/saved_models/user_profiler.pkl'):
-        """Load the model from disk"""
-        if not os.path.exists(filepath):
-            return False
-        
-        with open(filepath, 'rb') as f:
-            model_data = pickle.load(f)
-        
-        self.scaler = model_data['scaler']
-        self.kmeans = model_data['kmeans']
-        self.gmm = model_data['gmm']
-        self.pca = model_data['pca']
-        self.cluster_mapping = model_data['cluster_mapping']
-        self.is_fitted = model_data['is_fitted']
-        self.kmeans_profiles = model_data.get('kmeans_profiles', {})
-        self.gmm_profiles = model_data.get('gmm_profiles', {})
-        self.comparison_metrics = model_data.get('comparison_metrics', {})
-        self.feature_importance = model_data.get('feature_importance', {})
-        
-        return True
 
 def build_user_profiles(transactions_df, user_ids, db, model_type='kmeans'):
     """
