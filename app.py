@@ -343,7 +343,7 @@ if not st.session_state.initialized:
     
     ### Features:
     - 🤖 Two ML models (K-Means vs GMM) for comparison
-    - 🔍 Explainability (XAI) - understand why you got your profile
+    - 🔍 Explainability - understand why you got your profile
     - 📊 Interactive portfolio tracking
     - 💡 Smart allocation with continuous learning
     """)
@@ -484,7 +484,7 @@ else:
             "➕ Add Transaction", 
             "💼 Portfolio", 
             "📈 Performance",
-            "🔍 XAI & Comparison",
+            "🔍 Explainability",
             "⚙️ Settings"
         ])
         
@@ -824,7 +824,7 @@ else:
             )
             st.text(explanation)
         
-        # TAB 5: XAI & Model Comparison
+        # TAB 5: Explainability
         with tab5:
           
             # Feature importance
@@ -982,6 +982,6 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
     <p>💡 Smart Investment Round-Up System | ML-Powered Portfolio Management</p>
     <p style='font-size: 0.8em;'>Round up spare change → Auto-invest → Grow wealth 📈</p>
-    <p style='font-size: 0.8em;'>🤖 K-Means vs GMM | 🔍 XAI Explainability | 📊 Real-time Analytics</p>
+    <p style='font-size: 0.8em;'>🤖 K-Means vs GMM | 🔍 Explainability | 📊 Real-time Analytics</p>
 </div>
 """, unsafe_allow_html=True)
