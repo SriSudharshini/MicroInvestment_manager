@@ -6,6 +6,7 @@ from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 import pickle
+from src.data_preprocessing import compute_spending_features, prepare_ml_features
 import os
 
 class UserProfiler:
@@ -65,20 +66,6 @@ class UserProfiler:
         kmeans_clusters = self.kmeans.fit_predict(X_scaled)
         gmm_clusters = self.gmm.fit_predict(X_scaled)
         
-        # Calculate model comparison metrics
-        self.comparison_metrics = {
-            'kmeans': {
-                'silhouette': silhouette_score(X_scaled, kmeans_clusters),
-                'davies_bouldin': davies_bouldin_score(X_scaled, kmeans_clusters),
-                'inertia': self.kmeans.inertia_
-            },
-            'gmm': {
-                'silhouette': silhouette_score(X_scaled, gmm_clusters),
-                'davies_bouldin': davies_bouldin_score(X_scaled, gmm_clusters),
-                'bic': self.gmm.bic(X_scaled),
-                'aic': self.gmm.aic(X_scaled)
-            }
-        }
         
         # Fit PCA for visualization
         self.pca.fit(X_scaled)
@@ -265,11 +252,6 @@ class UserProfiler:
         # Sort by contribution
         contributions.sort(key=lambda x: x['contribution'], reverse=True)
         
-        # Create explanation
-        explanation = f"**{profile_data['profile']} Profile Explanation**\n\n"
-        explanation += f"Risk Score: {profile_data['risk_score']:.2f}\n\n"
-        explanation += "**Top Contributing Factors:**\n\n"
-        
         for i, contrib in enumerate(contributions[:5], 1):
             feature_display = contrib['feature'].replace('_', ' ').title()
             explanation += f"{i}. **{feature_display}**: {contrib['value']:.2f}\n"
@@ -374,9 +356,7 @@ def build_user_profiles(transactions_df, user_ids, db, model_type='kmeans'):
     
     Returns:
         UserProfiler instance
-    """
-    from src.data_preprocessing import compute_spending_features, prepare_ml_features
-    
+    """    
     # Compute features for all users
     features_list = []
     valid_user_ids = []
@@ -390,7 +370,7 @@ def build_user_profiles(transactions_df, user_ids, db, model_type='kmeans'):
                 features_list.append(feature_vector)
                 valid_user_ids.append(user_id)
                 features_dict_list.append(features_dict)
-    
+     
     # Convert to matrix
     feature_matrix = np.array(features_list)
     

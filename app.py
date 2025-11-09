@@ -154,7 +154,6 @@ def update_ml_allocations():
             
             # Retrain both models
             user_ids = list(db.users.keys())
-            from src.user_profiling import build_user_profiles
             
             st.session_state.profiler_kmeans = build_user_profiles(
                 df, user_ids, db, model_type='kmeans'
@@ -976,22 +975,6 @@ else:
                 if st.button("Update Threshold"):
                     db.users[user_id]['threshold'] = new_threshold
                     st.success(f"✅ Threshold updated to ₹{new_threshold}")
-            
-            st.divider()
-            
-            st.subheader("🎲 Quick Actions")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("💼 Trigger Batch Investment"):
-                    execute_batch_investment(user_id)
-            
-            with col2:
-                if st.button("🔄 Reset Wallet"):
-                    db.wallets[user_id]['balance'] = 0.0
-                    st.success("✅ Wallet reset!")
-                    st.rerun()
 
 # Footer
 st.divider()
