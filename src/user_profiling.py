@@ -93,12 +93,16 @@ class UserProfiler:
             # GMM profile
             gm_profile = self.cluster_mapping['gmm'][gm_cluster]
             gm_risk_score = self._compute_risk_score(gm_cluster, feature_matrix, gmm_clusters)
-                        
+            
+            # GMM also provides probability distribution
+            probs = self.gmm.predict_proba(self.scaler.transform([feature_matrix[list(user_ids).index(user_id)]]))[0]
+            
             self.gmm_profiles[user_id] = {
                 'profile': gm_profile,
                 'cluster': int(gm_cluster),
                 'risk_score': gm_risk_score,
                 'model': 'Gaussian Mixture',
+                'cluster_probabilities': probs.tolist()
             }
         
         self.is_fitted = True
@@ -248,6 +252,8 @@ class UserProfiler:
         # Sort by contribution
         contributions.sort(key=lambda x: x['contribution'], reverse=True)
         
+        # Create explanation
+        explanation = "**Top Contributing Factors:**\n\n"
         for i, contrib in enumerate(contributions[:5], 1):
             feature_display = contrib['feature'].replace('_', ' ').title()
             explanation += f"{i}. **{feature_display}**: {contrib['value']:.2f}\n"
@@ -266,7 +272,30 @@ class UserProfiler:
             'kmeans': self.kmeans_profiles.get(user_id, {}),
             'gmm': self.gmm_profiles.get(user_id, {})
         }
+    
+    def predict(self, feature_vector):
+        """Predict profile for a new user"""
+        if not self.is_fitted:
+            raise ValueError("Model must be fitted before prediction")
         
+        X_scaled = self.scaler.transform(feature_vector.reshape(1, -1))
+        
+        if self.model_type == 'kmeans':
+            cluster = self.kmeans.predict(X_scaled)[0]
+            profile = self.cluster_mapping['kmeans'][cluster]
+            distances = self.kmeans.transform(X_scaled)[0]
+            risk_score = 1 - (distances[cluster] / distances.sum())
+        else:
+            cluster = self.gmm.predict(X_scaled)[0]
+            profile = self.cluster_mapping['gmm'][cluster]
+            probs = self.gmm.predict_proba(X_scaled)[0]
+            risk_score = probs[cluster]
+        
+        return {
+            'profile': profile,
+            'cluster': int(cluster),
+            'risk_score': risk_score
+        }
 
 def build_user_profiles(transactions_df, user_ids, db, model_type='kmeans'):
     """
